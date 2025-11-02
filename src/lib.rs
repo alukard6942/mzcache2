@@ -7,3 +7,5 @@ pub mod index;
 pub mod utils;
 pub mod parse;
 pub mod error;
+
+pub use parse::parse_cache_folder;

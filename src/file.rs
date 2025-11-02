@@ -1,17 +1,19 @@
 use endian_trait::Endian;
 
-use crate::{consts::*, error::{CResult, Error}};
+use crate::{
+    consts::*,
+    error::{MzResult, MzError},
+};
 
 use core::slice;
-use std::{io, fmt::{Display, write}};
+use std::{
+    fmt::{write, Display},
+    io,
+};
 
 use crate::utils::{read_struct_buff, Timestamp};
 use flate2::read::GzDecoder;
-use std::{
-    io::Read,
-    mem::size_of,
-    ops::Shl,
-};
+use std::{io::Read, mem::size_of, ops::Shl};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Endian)]
@@ -26,16 +28,16 @@ struct Header {
     flags: u32,
 }
 
+#[derive(Debug)]
 pub struct CacheFile {
-    key: String,
-    header: Header,
-    body: Vec<u8>,
-    hash: Vec<u8>,
+    pub key: String,
+    pub header: Header,
+    pub body: Vec<u8>,
+    pub body_hash: Vec<u8>,
 }
 
 impl CacheFile {
     fn url(&self) -> &str {
-
         let key = &self.key;
 
         let mut s = key.rsplit(",");
@@ -44,27 +46,29 @@ impl CacheFile {
     }
 }
 
-
 impl Display for CacheFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-
         let key = self.url();
         let size = self.body.len();
         let fetched = self.header.last_fetched_time;
         let modified = self.header.last_modified_time;
-        let hash = &self.hash;
+        let hash = &self.body_hash;
 
-        write(f, format_args!("{:80} {:10} \t {} {}\n{:?}", key, size, fetched, modified, hash))
+        write(
+            f,
+            format_args!(
+                "{:80} {:10} \t {} {}\n{:?}",
+                key, size, fetched, modified, hash
+            ),
+        )
     }
 }
 
-
-
 // parses out the cache file, one big fc do not tuch
-pub fn parse_cachefile(data: &Vec<u8>) -> CResult<CacheFile> {
+pub fn parse_cachefile(data: &Vec<u8>) -> MzResult<CacheFile> {
     let size = data.len();
     if size <= size_of::<Header>() {
-        return Err(Error::FileTooSmall);
+        return Err(MzError::FileTooSmall);
     }
 
     let offset: usize = {
@@ -124,7 +128,8 @@ pub fn parse_cachefile(data: &Vec<u8>) -> CResult<CacheFile> {
     let meta_hdr: Header = read_struct_buff(header_buf).unwrap();
     let key = mbuff
         .get(key_offset..key_offset + meta_hdr.key_size as usize + 1)
-        .unwrap().to_vec();
+        .unwrap()
+        .to_vec();
 
     let elements_offset = meta_hdr.key_size as usize + key_offset + 1;
 
@@ -151,9 +156,9 @@ pub fn parse_cachefile(data: &Vec<u8>) -> CResult<CacheFile> {
             start = i + 1;
         }
     }
-    for e in elements {
-        println!("{}", String::from_utf8_lossy(&e));
-    }
+    // for e in elements {
+    //     println!("{}", String::from_utf8_lossy(&e));
+    // }
 
     //parse hashes
     let hash_buf = mbuff
@@ -161,21 +166,27 @@ pub fn parse_cachefile(data: &Vec<u8>) -> CResult<CacheFile> {
         .unwrap();
 
     let hash: Vec<u8> = {
-       let mut buff = Vec::<u8>::with_capacity(hash_count *2);
-       let hashes = unsafe { slice::from_raw_parts_mut(buff.as_mut_ptr() as *mut u16, hash_count) };
-       for i in 0..hash_count {
-           let hash: u16 = {
-               let high = hash_buf[i * 2] as u16;
-               let low = hash_buf[i * 2 + 1] as u16;
-               low + high.shl(4)
-           };
-           hashes[i] = hash;
-       }
-       unsafe {buff.set_len(hash_count *2)}
-       buff
+        if hash_count > 0 {
+            let mut buff = Vec::<u8>::with_capacity(hash_count * 2);
+            let hashes =
+                unsafe { slice::from_raw_parts_mut(buff.as_mut_ptr() as *mut u16, hash_count) };
+            for i in 0..hash_count {
+                let hash: u16 = {
+                    let high = hash_buf[i * 2] as u16;
+                    let low = hash_buf[i * 2 + 1] as u16;
+                    low + high.shl(4)
+                };
+                hashes[i] = hash;
+            }
+            unsafe { buff.set_len(hash_count * 2) }
+            buff
+        }
+        else {
+            Vec::<u8>::new()
+        }
     };
 
-    println!("{:?}", hash);
+    //println!("{:?}", hash);
 
     let data_buff = &data[0..realoffset];
 
@@ -185,7 +196,7 @@ pub fn parse_cachefile(data: &Vec<u8>) -> CResult<CacheFile> {
         key: String::from_utf8(key)?,
         header: meta_hdr,
         body: chunks,
-        hash,
+        body_hash: hash,
     })
 }
 
@@ -223,7 +234,10 @@ fn decopres_chunk(chunk: &[u8]) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
 
-    use std::{time::SystemTime, fs::{self, File}};
+    use std::{
+        fs::{self, File},
+        time::SystemTime,
+    };
 
     use super::*;
 
@@ -236,13 +250,13 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let year: u64 = 60 * 60 * 24 * 365;
+        let year: u64 = 60 * 60 * 24 * 365 * 3; // that was a wrong assumtion
 
         let modified = h.last_modified_time.0 as u64;
         let fetched = h.last_fetched_time.0 as u64;
 
         // is not form last year
-        if (modified > now || modified < (now - year)) || (fetched > now || fetched < (now - year))
+        if ((modified > now || modified < (now - year)) || (fetched > now || fetched < (now - year))) && modified >= fetched
         {
             // is not a specila value
             if modified > 10 && fetched > 10 {
@@ -288,6 +302,6 @@ mod tests {
 
         println!("{}/{} {}% succes", hits, n, 100. * hits / n);
 
-        assert!(hits / n >= 0.99);
+        assert!(hits / n >= 1.);
     }
 }

@@ -1,15 +1,24 @@
 use endian_trait::Endian;
 
-use crate::{utils::{Timestamp, read_struct_buff}, error::{CResult, Error}};
+use crate::{
+    error::{MzError, MzResult},
+    utils::{read_struct_buff, Timestamp},
+};
 
-use std::{fs::File, mem::size_of, io::Cursor};
+use std::{
+    fmt::{Debug, Display, UpperHex},
+    fs::File,
+    io::Cursor,
+    mem::{size_of, MaybeUninit},
+};
 
 use crate::utils::read_struct;
 
+#[derive(Debug)]
 pub struct IndexFile {
-    header: Header,
+    pub header: Header,
     // todo: hasmap with the hash as a hash
-    records: Vec<Record>,
+    pub records: Vec<Record>,
 }
 
 #[repr(C)]
@@ -22,8 +31,62 @@ struct Header {
     kb_writen: u32,
 }
 
-#[derive(Debug, Copy, Clone)]
-struct Hash([u8; 20]);
+#[derive(Copy, Clone, PartialEq)]
+pub struct Hash([u8; 20]);
+
+fn hex_char_to_number(c: char) -> Option<u8> {
+    match c {
+        '0'..='9' => Some(c as u8 - b'0'),
+        'A'..='F' => Some(c as u8 - b'A' + 10),
+        'a'..='f' => Some(c as u8 - b'a' + 10),
+        _ => None,
+    }
+}
+
+impl From<&String> for Hash {
+    fn from(value: &String) -> Self {
+        let hashsize = size_of::<Hash>();
+
+        assert!(value.as_bytes().len() == hashsize * 2);
+
+        let mut buf = MaybeUninit::<[u8; size_of::<Hash>()]>::uninit();
+
+        for i in 0..hashsize {
+            let ten = hex_char_to_number(value.as_bytes()[i * 2] as char).unwrap();
+            let one = hex_char_to_number(value.as_bytes()[i * 2 + 1] as char).unwrap();
+
+            let hex = ten * 16 + one;
+
+            unsafe {
+                buf.assume_init_mut()[i] = hex;
+            }
+        }
+        read_struct_buff(unsafe { &buf.assume_init() }).unwrap()
+    }
+}
+
+impl Debug for Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
+    }
+}
+
+impl Display for Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::new();
+
+        for n in self.0 {
+            let f = format!("{:02X}", n);
+            s.push_str(&f);
+        }
+
+        // write!(f,"{}", String::from_utf8_lossy(&self.0))
+
+        // f.debug_tuple("Hash").field(&self.0).finish()
+
+        write!(f, "{}", s)
+    }
+}
 
 impl Endian for Hash {
     fn to_be(self) -> Self {
@@ -42,14 +105,15 @@ impl Endian for Hash {
 
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, Endian)]
-struct Record {
-    hash: Hash,
-    // the fuck is frecency?
-    frecency: u32,
-    origin_attr_hash: u64,
-    on_start_time: u16,
-    on_stop_time: u16,
-    content_type: u8,
+pub struct Record {
+    pub hash: Hash,
+
+    // determins when will a cachefile be deleted
+    pub frecency: u32,
+    pub origin_attr_hash: u64,
+    pub on_start_time: u16,
+    pub on_stop_time: u16,
+    pub content_type: u8,
 
     /*
      *    1000 0000 0000 0000 0000 0000 0000 0000 : initialized
@@ -62,16 +126,15 @@ struct Record {
      *    0000 0001 0000 0000 0000 0000 0000 0000 : reserved
      *    0000 0000 1111 1111 1111 1111 1111 1111 : file size (in kB)
      */
-    flags: u32,
+    pub flags: u32,
 }
 
-pub fn read_index_file(b: &mut [u8]) -> CResult<IndexFile> {
-
+pub fn read_index_file(b: &mut [u8]) -> MzResult<IndexFile> {
     let mut cursor = Cursor::new(b);
 
-    let header : Header = match read_struct(&mut cursor) {
+    let header: Header = match read_struct(&mut cursor) {
         Some(it) => it,
-        None => return Err(Error::MissingHeader),
+        None => return Err(MzError::MissingHeader),
     };
     let mut records = Vec::new();
 
@@ -115,10 +178,13 @@ mod tests {
         let path = "cache2/index";
         let mut f = File::open(path.to_string()).unwrap();
 
-        let _ : Header = read_struct(&mut f).unwrap();
- 
+        let _: Header = read_struct(&mut f).unwrap();
+
         // fuck you for not leting me declere the type as the part of the let Some statment
-        while let Some(record) = { let tmp : Option<Record> = read_struct(&mut f); tmp }{
+        while let Some(record) = {
+            let tmp: Option<Record> = read_struct(&mut f);
+            tmp
+        } {
             print!("{:#?}", record);
             assert!(record.on_start_time <= record.on_stop_time);
         }
