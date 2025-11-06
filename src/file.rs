@@ -2,7 +2,7 @@ use endian_trait::Endian;
 
 use crate::{
     consts::*,
-    error::{MzResult, MzError},
+    error::{MzError, MzResult},
 };
 
 use core::slice;
@@ -180,8 +180,7 @@ pub fn parse_cachefile(data: &Vec<u8>) -> MzResult<CacheFile> {
             }
             unsafe { buff.set_len(hash_count * 2) }
             buff
-        }
-        else {
+        } else {
             Vec::<u8>::new()
         }
     };
@@ -214,7 +213,7 @@ fn parse_chunks(data_buff: &[u8]) -> io::Result<Vec<u8>> {
                 ))
             }
         };
-        if chunk_buf[0..2] == b"\x1F\x8B".to_vec() {
+        if chunk_buf.len() >= 2 && chunk_buf[0..2] == b"\x1F\x8B".to_vec() {
             let mut plain_buf = decopres_chunk(chunk_buf)?;
             chunks.append(&mut plain_buf);
         } else {
@@ -256,7 +255,9 @@ mod tests {
         let fetched = h.last_fetched_time.0 as u64;
 
         // is not form last year
-        if ((modified > now || modified < (now - year)) || (fetched > now || fetched < (now - year))) && modified >= fetched
+        if ((modified > now || modified < (now - year))
+            || (fetched > now || fetched < (now - year)))
+            && modified >= fetched
         {
             // is not a specila value
             if modified > 10 && fetched > 10 {
